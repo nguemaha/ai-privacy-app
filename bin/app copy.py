@@ -38,19 +38,41 @@ def load_synthetic_data():
     }
     return pd.DataFrame(data)
 
-raw_df = load_synthetic_data()
+# --- Allow user to upload CSV file ---
+uploaded_file = st.sidebar.file_uploader(
+    "Upload CSV with required columns (Patient_Name, Patient_ID, Age, ZIP_Code, Gender, Diagnosis, Treatment_Cost):",
+    type=["csv"]
+)
+
+if uploaded_file is not None:
+    try:
+        raw_df = pd.read_csv(uploaded_file)
+        st.sidebar.success("CSV uploaded successfully.")
+    except Exception as e:
+        st.sidebar.error(f"Error reading CSV: {e}")
+        raw_df = load_synthetic_data()
+else:
+    raw_df = load_synthetic_data()
 
 # --- SIDEBAR CONTROLS ---
 st.sidebar.header("Privacy Settings")
 k_value = st.sidebar.slider("Select K-Anonymity Level (k)", 1, 5, 2)
 hash_salt = st.sidebar.text_input("Encryption Salt", "HMA-2026-SECURE", type="password")
 
+# Multiselect for Quasi-Identifiers
+quasi_identifier_options = ['Age', 'ZIP_Code', 'Gender']
+selected_quasi_identifiers = st.sidebar.multiselect(
+    "Select Quasi-Identifiers for K-Anonymity",
+    options=quasi_identifier_options,
+    default=quasi_identifier_options  # All selected by default
+)
+
 st.sidebar.info(f"""
 **K-Anonymity:** Ensuring that any individual in the dataset cannot be distinguished from at least **{k_value-1}** other individuals.
 """)
 
 # --- 2. THE DE-IDENTIFICATION LOGIC ---
-def deidentify_data(df, k, salt):
+def deidentify_data(df, k, salt, cols_to_check):
     df_clean = df.copy()
     
     # A. Masking Direct Identifiers (Hashing)
@@ -67,9 +89,11 @@ def deidentify_data(df, k, salt):
     # C. Generalization (ZIP Code Masking)
     df_clean['ZIP_Code'] = df_clean['ZIP_Code'].str[:3] + "**"
     
-    # D. K-Anonymity Check (Simple Implementation)
-    # We group by Quasi-Identifiers: Age, ZIP, Gender
-    cols_to_check = ['Age', 'ZIP_Code', 'Gender']
+    # D. K-Anonymity Check (Flexible Implementation)
+    if not cols_to_check:
+        # If no quasi-identifiers selected, skip suppression
+        df_clean['__dummy__'] = 1
+        cols_to_check = ['__dummy__']
     counts = df_clean.groupby(cols_to_check)[cols_to_check[0]].transform('count')
     
     # If a row doesn't meet K, we "Suppress" it (remove it) to maintain privacy
@@ -77,7 +101,7 @@ def deidentify_data(df, k, salt):
     
     return df_clean, len(df) - len(df_clean)
 
-processed_df, suppressed_count = deidentify_data(raw_df, k_value, hash_salt)
+processed_df, suppressed_count = deidentify_data(raw_df, k_value, hash_salt, selected_quasi_identifiers)
 
 # --- 3. UI TABS ---
 tab1, tab2, tab3 = st.tabs(["📊 Data Transformation", "📈 Utility Analysis", "📜 Governance Report"])
@@ -89,7 +113,7 @@ with tab1:
         st.subheader("Raw Clinical Data (Insecure)")
         st.caption("Contains PII and high-resolution identifiers.")
         st.dataframe(raw_df, use_container_width=True)
-        st.error("⚠️ Risk: PII exposure, HIPAA non-compliance.")
+        st.error("⚠️ Risk: PII exposure, HIPAA non-compliance. [Learn more about HIPAA compliance](https://www.hhs.gov/hipaa/for-professionals/privacy/index.html)")
 
     with col2:
         st.subheader("De-identified Data (Secure)")
